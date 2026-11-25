@@ -1,0 +1,11 @@
+/.env
+/vendor/
+/node_modules/
+/public/assets/vendor/
+/storage/cache/*
+/storage/logs/*
+/storage/uploads/*
+/.phpunit.cache/
+/.idea/
+/.vscode/
+!.gitkeep

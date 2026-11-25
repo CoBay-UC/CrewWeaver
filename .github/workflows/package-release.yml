@@ -1,0 +1,61 @@
+name: Package release
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: crewweaver-package-release
+  queue: max
+
+jobs:
+  publish:
+    if: >-
+      github.event.pull_request.merged &&
+      github.event.pull_request.head.ref == 'dev' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      - name: Build and publish release image
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="v1.0.$GITHUB_RUN_NUMBER"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$MERGE_SHA" \
+            --label "org.opencontainers.image.version=$version" \
+            --tag "$image:$version" .
+          docker push "$image:$version"
+          echo "reference=$image:$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release and update latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+          VERSION: ${{ steps.image.outputs.version }}
+        run: |
+          image="${IMAGE_REFERENCE%:*}"
+          latest=--latest=false
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$MERGE_SHA" ]; then
+            docker tag "$IMAGE_REFERENCE" "$image:latest"
+            docker push "$image:latest"
+            latest=--latest
+          fi
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release create "$VERSION" --target "$MERGE_SHA" --title "CrewWeaver $VERSION" \
+              "$latest" --generate-notes --notes "Docker image: \`$IMAGE_REFERENCE\`."
+          fi
